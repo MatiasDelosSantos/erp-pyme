@@ -20,7 +20,6 @@ export default function ProductsPage() {
     descripcion: "",
     precioCompra: 0,
     precioVenta: 0,
-    stock: 0,
   });
 
   const loadProducts = async (search?: string) => {
@@ -46,7 +45,6 @@ export default function ProductsPage() {
       descripcion: "",
       precioCompra: 0,
       precioVenta: 0,
-      stock: 0,
     });
     setDialogOpen(true);
   };
@@ -58,7 +56,6 @@ export default function ProductsPage() {
       descripcion: product.descripcion,
       precioCompra: Number(product.precioCompra),
       precioVenta: Number(product.precioVenta),
-      stock: product.stock,
     });
     setDialogOpen(true);
   };
@@ -200,18 +197,21 @@ export default function ProductsPage() {
               />
             </div>
           </div>
-          <div>
-            <Label htmlFor="stock">Stock Inicial</Label>
-            <Input
-              id="stock"
-              type="number"
-              min="0"
-              value={formData.stock}
-              onChange={(e) =>
-                setFormData({ ...formData, stock: Number(e.target.value) })
-              }
-            />
-          </div>
+          {editingProduct && (
+            <div>
+              <Label htmlFor="stock">Stock Actual</Label>
+              <Input
+                id="stock"
+                type="number"
+                value={editingProduct.stock}
+                disabled
+                className="bg-slate-100"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                El stock se gestiona desde Movimientos Stock
+              </p>
+            </div>
+          )}
         </div>
       </FormDialog>
     </div>
