@@ -1,0 +1,17 @@
+{
+  "name": "erp-pyme",
+  "version": "1.0.0",
+  "description": "ERP minimo viable para PyMEs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": ["erp", "pyme", "facturacion", "stock", "ventas"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "uuid": "^9.0.0"
+  }
+}
