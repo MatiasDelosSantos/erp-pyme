@@ -1,14 +1,16 @@
-const { db } = require('../../shared/data/memoria');
-const { crearCuentaContable, crearAsiento, crearMovimiento } = require('./contabilidad.model');
+const prisma = require('../../shared/data/prisma');
 const { ErrorApp } = require('../../shared/middlewares/errorHandler');
 
 // ============ CUENTAS CONTABLES ============
 
-const listarCuentas = () => {
-  return db.cuentasContables.filter(c => c.activa).sort((a, b) => a.codigo.localeCompare(b.codigo));
+const listarCuentas = async () => {
+  return prisma.cuentaContable.findMany({
+    where: { activa: true },
+    orderBy: { codigo: 'asc' }
+  });
 };
 
-const crearNuevaCuenta = (datos) => {
+const crearNuevaCuenta = async (datos) => {
   if (!datos.codigo) {
     throw new ErrorApp('El código de la cuenta es requerido', 400);
   }
@@ -25,77 +27,93 @@ const crearNuevaCuenta = (datos) => {
   }
 
   // Verificar que no exista el código
-  const existente = db.cuentasContables.find(c => c.codigo === datos.codigo);
+  const existente = await prisma.cuentaContable.findUnique({
+    where: { codigo: datos.codigo }
+  });
+
   if (existente) {
     throw new ErrorApp('Ya existe una cuenta con ese código', 400);
   }
 
-  const cuenta = crearCuentaContable(datos);
-  db.cuentasContables.push(cuenta);
-  return cuenta;
+  return prisma.cuentaContable.create({
+    data: {
+      codigo: datos.codigo,
+      nombre: datos.nombre,
+      tipo: datos.tipo
+    }
+  });
 };
 
-const actualizarCuenta = (id, datos) => {
-  const indice = db.cuentasContables.findIndex(c => c.id === id && c.activa);
-  if (indice === -1) {
+const actualizarCuenta = async (id, datos) => {
+  const cuenta = await prisma.cuentaContable.findFirst({
+    where: { id, activa: true }
+  });
+
+  if (!cuenta) {
     throw new ErrorApp('Cuenta contable no encontrada', 404);
   }
 
   // No permitir cambiar el código si tiene movimientos
-  if (datos.codigo && datos.codigo !== db.cuentasContables[indice].codigo) {
-    const tieneMovimientos = db.asientos.some(a =>
-      a.movimientos.some(m => m.cuentaContableId === id)
-    );
-    if (tieneMovimientos) {
+  if (datos.codigo && datos.codigo !== cuenta.codigo) {
+    const tieneMovimientos = await prisma.asientoMovimiento.count({
+      where: { cuentaContableId: id }
+    });
+
+    if (tieneMovimientos > 0) {
       throw new ErrorApp('No se puede cambiar el código de una cuenta con movimientos', 400);
     }
   }
 
-  db.cuentasContables[indice] = {
-    ...db.cuentasContables[indice],
-    ...datos,
-    id: db.cuentasContables[indice].id,
-    saldo: db.cuentasContables[indice].saldo
-  };
-
-  return db.cuentasContables[indice];
+  return prisma.cuentaContable.update({
+    where: { id },
+    data: {
+      codigo: datos.codigo !== undefined ? datos.codigo : cuenta.codigo,
+      nombre: datos.nombre !== undefined ? datos.nombre : cuenta.nombre,
+      tipo: datos.tipo !== undefined ? datos.tipo : cuenta.tipo
+    }
+  });
 };
 
 // ============ ASIENTOS ============
 
-const listarAsientos = (filtros = {}) => {
-  let resultado = [...db.asientos];
+const listarAsientos = async (filtros = {}) => {
+  const where = {};
 
   if (filtros.fechaDesde) {
-    const fechaDesde = new Date(filtros.fechaDesde);
-    resultado = resultado.filter(a => new Date(a.fecha) >= fechaDesde);
+    where.fecha = { ...where.fecha, gte: new Date(filtros.fechaDesde) };
   }
   if (filtros.fechaHasta) {
-    const fechaHasta = new Date(filtros.fechaHasta);
-    resultado = resultado.filter(a => new Date(a.fecha) <= fechaHasta);
+    where.fecha = { ...where.fecha, lte: new Date(filtros.fechaHasta) };
   }
 
-  return resultado.sort((a, b) => a.numero - b.numero);
+  return prisma.asiento.findMany({
+    where,
+    include: {
+      movimientos: {
+        include: { cuentaContable: true }
+      }
+    },
+    orderBy: { numero: 'asc' }
+  });
 };
 
-const obtenerAsiento = (id) => {
-  const asiento = db.asientos.find(a => a.id === id);
+const obtenerAsiento = async (id) => {
+  const asiento = await prisma.asiento.findUnique({
+    where: { id },
+    include: {
+      movimientos: {
+        include: { cuentaContable: true }
+      }
+    }
+  });
+
   if (!asiento) {
     throw new ErrorApp('Asiento no encontrado', 404);
   }
-
-  const movimientosConCuenta = asiento.movimientos.map(m => ({
-    ...m,
-    cuentaContable: db.cuentasContables.find(c => c.id === m.cuentaContableId)
-  }));
-
-  return {
-    ...asiento,
-    movimientos: movimientosConCuenta
-  };
+  return asiento;
 };
 
-const crearNuevoAsiento = (datos) => {
+const crearNuevoAsiento = async (datos) => {
   if (!datos.descripcion) {
     throw new ErrorApp('La descripción es requerida', 400);
   }
@@ -103,22 +121,31 @@ const crearNuevoAsiento = (datos) => {
     throw new ErrorApp('El asiento debe tener al menos dos movimientos', 400);
   }
 
-  const asiento = crearAsiento(datos);
-
   let totalDebe = 0;
   let totalHaber = 0;
+  const movimientosData = [];
 
   for (const movData of datos.movimientos) {
-    const cuenta = db.cuentasContables.find(c => c.id === movData.cuentaContableId && c.activa);
+    const cuenta = await prisma.cuentaContable.findFirst({
+      where: { id: movData.cuentaContableId, activa: true }
+    });
+
     if (!cuenta) {
       throw new ErrorApp(`Cuenta contable no encontrada: ${movData.cuentaContableId}`, 404);
     }
 
-    const movimiento = crearMovimiento(movData, asiento.id);
-    asiento.movimientos.push(movimiento);
+    const debe = movData.debe || 0;
+    const haber = movData.haber || 0;
 
-    totalDebe += movimiento.debe;
-    totalHaber += movimiento.haber;
+    movimientosData.push({
+      cuentaContableId: movData.cuentaContableId,
+      debe,
+      haber,
+      descripcion: movData.descripcion || null
+    });
+
+    totalDebe += debe;
+    totalHaber += haber;
   }
 
   // Validar partida doble
@@ -126,42 +153,62 @@ const crearNuevoAsiento = (datos) => {
     throw new ErrorApp('El asiento no está balanceado (debe = haber)', 400);
   }
 
+  // Crear asiento con movimientos
+  const asiento = await prisma.asiento.create({
+    data: {
+      fecha: datos.fecha ? new Date(datos.fecha) : new Date(),
+      descripcion: datos.descripcion,
+      movimientos: { create: movimientosData }
+    },
+    include: {
+      movimientos: {
+        include: { cuentaContable: true }
+      }
+    }
+  });
+
   // Actualizar saldos de las cuentas
   for (const mov of asiento.movimientos) {
-    const indiceCuenta = db.cuentasContables.findIndex(c => c.id === mov.cuentaContableId);
-    if (indiceCuenta !== -1) {
-      const cuenta = db.cuentasContables[indiceCuenta];
+    const cuenta = await prisma.cuentaContable.findUnique({
+      where: { id: mov.cuentaContableId }
+    });
+
+    if (cuenta) {
+      let ajuste = 0;
       // Para activos y egresos: debe aumenta, haber disminuye
       // Para pasivos, patrimonio e ingresos: haber aumenta, debe disminuye
       if (['activo', 'egreso'].includes(cuenta.tipo)) {
-        cuenta.saldo += mov.debe - mov.haber;
+        ajuste = Number(mov.debe) - Number(mov.haber);
       } else {
-        cuenta.saldo += mov.haber - mov.debe;
+        ajuste = Number(mov.haber) - Number(mov.debe);
       }
+
+      await prisma.cuentaContable.update({
+        where: { id: cuenta.id },
+        data: { saldo: { increment: ajuste } }
+      });
     }
   }
 
-  db.asientos.push(asiento);
   return asiento;
 };
 
 // ============ REPORTES ============
 
-const obtenerLibroDiario = (filtros = {}) => {
-  const asientos = listarAsientos(filtros);
+const obtenerLibroDiario = async (filtros = {}) => {
+  const asientos = await listarAsientos(filtros);
 
   const lineas = [];
   for (const asiento of asientos) {
     for (const mov of asiento.movimientos) {
-      const cuenta = db.cuentasContables.find(c => c.id === mov.cuentaContableId);
       lineas.push({
         fecha: asiento.fecha,
         numeroAsiento: asiento.numero,
         descripcion: asiento.descripcion,
-        codigoCuenta: cuenta ? cuenta.codigo : '',
-        nombreCuenta: cuenta ? cuenta.nombre : '',
-        debe: mov.debe,
-        haber: mov.haber
+        codigoCuenta: mov.cuentaContable?.codigo || '',
+        nombreCuenta: mov.cuentaContable?.nombre || '',
+        debe: Number(mov.debe),
+        haber: Number(mov.haber)
       });
     }
   }
@@ -169,35 +216,42 @@ const obtenerLibroDiario = (filtros = {}) => {
   return lineas;
 };
 
-const obtenerLibroMayor = (cuentaId) => {
-  const cuenta = db.cuentasContables.find(c => c.id === cuentaId);
+const obtenerLibroMayor = async (cuentaId) => {
+  const cuenta = await prisma.cuentaContable.findUnique({
+    where: { id: cuentaId }
+  });
+
   if (!cuenta) {
     throw new ErrorApp('Cuenta contable no encontrada', 404);
   }
 
-  const movimientos = [];
-  let saldoAcumulado = 0;
-
-  for (const asiento of db.asientos.sort((a, b) => new Date(a.fecha) - new Date(b.fecha))) {
-    for (const mov of asiento.movimientos) {
-      if (mov.cuentaContableId === cuentaId) {
-        if (['activo', 'egreso'].includes(cuenta.tipo)) {
-          saldoAcumulado += mov.debe - mov.haber;
-        } else {
-          saldoAcumulado += mov.haber - mov.debe;
-        }
-
-        movimientos.push({
-          fecha: asiento.fecha,
-          numeroAsiento: asiento.numero,
-          descripcion: asiento.descripcion,
-          debe: mov.debe,
-          haber: mov.haber,
-          saldo: saldoAcumulado
-        });
-      }
+  const movimientos = await prisma.asientoMovimiento.findMany({
+    where: { cuentaContableId: cuentaId },
+    include: {
+      asiento: true
+    },
+    orderBy: {
+      asiento: { fecha: 'asc' }
     }
-  }
+  });
+
+  let saldoAcumulado = 0;
+  const lineas = movimientos.map(mov => {
+    if (['activo', 'egreso'].includes(cuenta.tipo)) {
+      saldoAcumulado += Number(mov.debe) - Number(mov.haber);
+    } else {
+      saldoAcumulado += Number(mov.haber) - Number(mov.debe);
+    }
+
+    return {
+      fecha: mov.asiento.fecha,
+      numeroAsiento: mov.asiento.numero,
+      descripcion: mov.asiento.descripcion,
+      debe: Number(mov.debe),
+      haber: Number(mov.haber),
+      saldo: saldoAcumulado
+    };
+  });
 
   return {
     cuenta: {
@@ -205,31 +259,38 @@ const obtenerLibroMayor = (cuentaId) => {
       nombre: cuenta.nombre,
       tipo: cuenta.tipo
     },
-    movimientos,
+    movimientos: lineas,
     saldoFinal: saldoAcumulado
   };
 };
 
-const obtenerBalanceSumasSaldos = () => {
-  const cuentas = db.cuentasContables.filter(c => c.activa);
+const obtenerBalanceSumasSaldos = async () => {
+  const cuentas = await prisma.cuentaContable.findMany({
+    where: { activa: true },
+    orderBy: { codigo: 'asc' }
+  });
 
   let totalDebe = 0;
   let totalHaber = 0;
   let totalSaldoDeudor = 0;
   let totalSaldoAcreedor = 0;
 
-  const lineas = cuentas.map(cuenta => {
+  const lineas = [];
+
+  for (const cuenta of cuentas) {
+    const movimientos = await prisma.asientoMovimiento.findMany({
+      where: { cuentaContableId: cuenta.id }
+    });
+
     let sumaDebe = 0;
     let sumaHaber = 0;
 
-    for (const asiento of db.asientos) {
-      for (const mov of asiento.movimientos) {
-        if (mov.cuentaContableId === cuenta.id) {
-          sumaDebe += mov.debe;
-          sumaHaber += mov.haber;
-        }
-      }
+    for (const mov of movimientos) {
+      sumaDebe += Number(mov.debe);
+      sumaHaber += Number(mov.haber);
     }
+
+    if (sumaDebe === 0 && sumaHaber === 0) continue;
 
     const saldoDeudor = sumaDebe > sumaHaber ? sumaDebe - sumaHaber : 0;
     const saldoAcreedor = sumaHaber > sumaDebe ? sumaHaber - sumaDebe : 0;
@@ -239,7 +300,7 @@ const obtenerBalanceSumasSaldos = () => {
     totalSaldoDeudor += saldoDeudor;
     totalSaldoAcreedor += saldoAcreedor;
 
-    return {
+    lineas.push({
       codigo: cuenta.codigo,
       nombre: cuenta.nombre,
       tipo: cuenta.tipo,
@@ -247,11 +308,11 @@ const obtenerBalanceSumasSaldos = () => {
       sumaHaber,
       saldoDeudor,
       saldoAcreedor
-    };
-  }).filter(l => l.sumaDebe > 0 || l.sumaHaber > 0);
+    });
+  }
 
   return {
-    lineas: lineas.sort((a, b) => a.codigo.localeCompare(b.codigo)),
+    lineas,
     totales: {
       debe: totalDebe,
       haber: totalHaber,

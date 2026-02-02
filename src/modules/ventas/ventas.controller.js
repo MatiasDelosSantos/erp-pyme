@@ -5,27 +5,27 @@ const { asyncHandler } = require('../../shared/middlewares/errorHandler');
 
 const listarClientes = asyncHandler(async (req, res) => {
   const filtros = { busqueda: req.query.busqueda };
-  const clientes = ventasService.listarClientes(filtros);
+  const clientes = await ventasService.listarClientes(filtros);
   res.json({ exito: true, datos: clientes });
 });
 
 const obtenerCliente = asyncHandler(async (req, res) => {
-  const cliente = ventasService.obtenerCliente(req.params.id);
+  const cliente = await ventasService.obtenerCliente(req.params.id);
   res.json({ exito: true, datos: cliente });
 });
 
 const crearCliente = asyncHandler(async (req, res) => {
-  const cliente = ventasService.crearNuevoCliente(req.body);
+  const cliente = await ventasService.crearNuevoCliente(req.body);
   res.status(201).json({ exito: true, datos: cliente });
 });
 
 const actualizarCliente = asyncHandler(async (req, res) => {
-  const cliente = ventasService.actualizarCliente(req.params.id, req.body);
+  const cliente = await ventasService.actualizarCliente(req.params.id, req.body);
   res.json({ exito: true, datos: cliente });
 });
 
 const eliminarCliente = asyncHandler(async (req, res) => {
-  const resultado = ventasService.eliminarCliente(req.params.id);
+  const resultado = await ventasService.eliminarCliente(req.params.id);
   res.json({ exito: true, ...resultado });
 });
 
@@ -36,33 +36,33 @@ const listarPedidos = asyncHandler(async (req, res) => {
     estado: req.query.estado,
     clienteId: req.query.clienteId
   };
-  const pedidos = ventasService.listarPedidos(filtros);
+  const pedidos = await ventasService.listarPedidos(filtros);
   res.json({ exito: true, datos: pedidos });
 });
 
 const obtenerPedido = asyncHandler(async (req, res) => {
-  const pedido = ventasService.obtenerPedido(req.params.id);
+  const pedido = await ventasService.obtenerPedido(req.params.id);
   res.json({ exito: true, datos: pedido });
 });
 
 const crearPedido = asyncHandler(async (req, res) => {
-  const pedido = ventasService.crearNuevoPedido(req.body);
+  const pedido = await ventasService.crearNuevoPedido(req.body);
   res.status(201).json({ exito: true, datos: pedido });
 });
 
 const actualizarPedido = asyncHandler(async (req, res) => {
-  const pedido = ventasService.actualizarPedido(req.params.id, req.body);
+  const pedido = await ventasService.actualizarPedido(req.params.id, req.body);
   res.json({ exito: true, datos: pedido });
 });
 
 const cambiarEstadoPedido = asyncHandler(async (req, res) => {
   const { estado } = req.body;
-  const pedido = ventasService.cambiarEstadoPedido(req.params.id, estado);
+  const pedido = await ventasService.cambiarEstadoPedido(req.params.id, estado);
   res.json({ exito: true, datos: pedido });
 });
 
 const cancelarPedido = asyncHandler(async (req, res) => {
-  const pedido = ventasService.cancelarPedido(req.params.id);
+  const pedido = await ventasService.cancelarPedido(req.params.id);
   res.json({ exito: true, datos: pedido });
 });
 
@@ -70,17 +70,17 @@ const cancelarPedido = asyncHandler(async (req, res) => {
 
 const listarAlbaranes = asyncHandler(async (req, res) => {
   const filtros = { clienteId: req.query.clienteId };
-  const albaranes = ventasService.listarAlbaranes(filtros);
+  const albaranes = await ventasService.listarAlbaranes(filtros);
   res.json({ exito: true, datos: albaranes });
 });
 
 const obtenerAlbaran = asyncHandler(async (req, res) => {
-  const albaran = ventasService.obtenerAlbaran(req.params.id);
+  const albaran = await ventasService.obtenerAlbaran(req.params.id);
   res.json({ exito: true, datos: albaran });
 });
 
 const crearAlbaran = asyncHandler(async (req, res) => {
-  const albaran = ventasService.crearNuevoAlbaran(req.body);
+  const albaran = await ventasService.crearNuevoAlbaran(req.body);
   res.status(201).json({ exito: true, datos: albaran });
 });
 

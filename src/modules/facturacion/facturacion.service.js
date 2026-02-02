@@ -1,66 +1,77 @@
-const { db } = require('../../shared/data/memoria');
-const { crearFactura, crearFacturaLinea, crearNotaCredito, crearNotaCreditoLinea } = require('./facturacion.model');
+const prisma = require('../../shared/data/prisma');
+const { generarCodigoDesdeConteo } = require('../../shared/utils/generadorCodigo');
 const { ErrorApp } = require('../../shared/middlewares/errorHandler');
+
+const IVA_DEFECTO = 21;
 
 // ============ FACTURAS ============
 
-const listarFacturas = (filtros = {}) => {
-  let resultado = [...db.facturas];
+const listarFacturas = async (filtros = {}) => {
+  const where = {};
 
   if (filtros.estado) {
-    resultado = resultado.filter(f => f.estado === filtros.estado);
+    where.estado = filtros.estado;
   }
   if (filtros.clienteId) {
-    resultado = resultado.filter(f => f.clienteId === filtros.clienteId);
+    where.clienteId = filtros.clienteId;
   }
 
-  return resultado.map(f => ({
-    ...f,
-    cliente: db.clientes.find(c => c.id === f.clienteId)
-  }));
+  return prisma.factura.findMany({
+    where,
+    include: {
+      cliente: true,
+      lineas: { include: { articulo: true } }
+    },
+    orderBy: { creadoEn: 'desc' }
+  });
 };
 
-const obtenerFactura = (id) => {
-  const factura = db.facturas.find(f => f.id === id);
+const obtenerFactura = async (id) => {
+  const factura = await prisma.factura.findUnique({
+    where: { id },
+    include: {
+      cliente: true,
+      pedido: true,
+      lineas: { include: { articulo: true } }
+    }
+  });
+
   if (!factura) {
     throw new ErrorApp('Factura no encontrada', 404);
   }
-
-  const lineasConArticulo = factura.lineas.map(linea => ({
-    ...linea,
-    articulo: db.articulos.find(a => a.id === linea.articuloId)
-  }));
-
-  return {
-    ...factura,
-    cliente: db.clientes.find(c => c.id === factura.clienteId),
-    pedido: factura.pedidoId ? db.pedidos.find(p => p.id === factura.pedidoId) : null,
-    lineas: lineasConArticulo
-  };
+  return factura;
 };
 
-const calcularTotales = (factura) => {
-  factura.subtotal = factura.lineas.reduce((sum, l) => sum + l.subtotal, 0);
-  factura.montoIva = factura.subtotal * (factura.porcentajeIva / 100);
-  factura.total = factura.subtotal + factura.montoIva;
-  factura.saldoPendiente = factura.total;
-};
-
-const crearNuevaFactura = (datos) => {
+const crearNuevaFactura = async (datos) => {
   if (!datos.clienteId) {
     throw new ErrorApp('El cliente es requerido', 400);
   }
 
-  const cliente = db.clientes.find(c => c.id === datos.clienteId && c.activo);
+  const cliente = await prisma.cliente.findFirst({
+    where: { id: datos.clienteId, activo: true }
+  });
+
   if (!cliente) {
     throw new ErrorApp('Cliente no encontrado', 404);
   }
 
-  const factura = crearFactura(datos, cliente);
+  const numero = await generarCodigoDesdeConteo(prisma, 'factura', 'FAC');
+  const porcentajeIva = datos.porcentajeIva || IVA_DEFECTO;
+
+  const fechaVencimiento = datos.fechaVencimiento
+    ? new Date(datos.fechaVencimiento)
+    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 días
+
+  let lineasData = [];
+  let subtotal = 0;
 
   // Si viene de un pedido, copiar las líneas
   if (datos.pedidoId) {
-    const pedido = db.pedidos.find(p => p.id === datos.pedidoId);
+    const pedido = await prisma.pedido.findUnique({
+      where: { id: datos.pedidoId },
+      include: { lineas: { include: { articulo: true } } }
+    });
+
     if (!pedido) {
       throw new ErrorApp('Pedido no encontrado', 404);
     }
@@ -69,109 +80,149 @@ const crearNuevaFactura = (datos) => {
     }
 
     for (const lineaPedido of pedido.lineas) {
-      const articulo = db.articulos.find(a => a.id === lineaPedido.articuloId);
-      const linea = crearFacturaLinea({
+      const lineaSubtotal = lineaPedido.cantidad * Number(lineaPedido.precioUnitario);
+      lineasData.push({
         articuloId: lineaPedido.articuloId,
-        descripcion: articulo ? articulo.nombre : 'Artículo',
+        descripcion: lineaPedido.articulo?.nombre || 'Artículo',
         cantidad: lineaPedido.cantidad,
-        precioUnitario: lineaPedido.precioUnitario
-      }, factura.id);
-      factura.lineas.push(linea);
+        precioUnitario: Number(lineaPedido.precioUnitario),
+        subtotal: lineaSubtotal
+      });
+      subtotal += lineaSubtotal;
     }
   }
 
   // Agregar líneas manuales si vienen
   if (datos.lineas && Array.isArray(datos.lineas)) {
     for (const lineaData of datos.lineas) {
-      const articulo = db.articulos.find(a => a.id === lineaData.articuloId);
-      const linea = crearFacturaLinea({
+      const articulo = await prisma.articulo.findUnique({
+        where: { id: lineaData.articuloId }
+      });
+
+      const precioUnitario = lineaData.precioUnitario || (articulo ? Number(articulo.precioVenta) : 0);
+      const lineaSubtotal = lineaData.cantidad * precioUnitario;
+
+      lineasData.push({
         articuloId: lineaData.articuloId,
         descripcion: lineaData.descripcion || (articulo ? articulo.nombre : 'Artículo'),
         cantidad: lineaData.cantidad,
-        precioUnitario: lineaData.precioUnitario || (articulo ? articulo.precioVenta : 0)
-      }, factura.id);
-      factura.lineas.push(linea);
+        precioUnitario,
+        subtotal: lineaSubtotal
+      });
+      subtotal += lineaSubtotal;
     }
   }
 
-  calcularTotales(factura);
-  db.facturas.push(factura);
+  const montoIva = subtotal * (porcentajeIva / 100);
+  const total = subtotal + montoIva;
 
-  return factura;
+  return prisma.factura.create({
+    data: {
+      numero,
+      fechaVencimiento,
+      clienteId: datos.clienteId,
+      pedidoId: datos.pedidoId || null,
+      subtotal,
+      porcentajeIva,
+      montoIva,
+      total,
+      saldoPendiente: total,
+      observaciones: datos.observaciones || null,
+      lineas: { create: lineasData }
+    },
+    include: {
+      cliente: true,
+      lineas: { include: { articulo: true } }
+    }
+  });
 };
 
-const anularFactura = (id) => {
-  const indice = db.facturas.findIndex(f => f.id === id);
-  if (indice === -1) {
+const anularFactura = async (id) => {
+  const factura = await prisma.factura.findUnique({ where: { id } });
+
+  if (!factura) {
     throw new ErrorApp('Factura no encontrada', 404);
   }
 
-  const factura = db.facturas[indice];
   if (factura.estado === 'cobrada') {
     throw new ErrorApp('No se puede anular una factura cobrada', 400);
   }
 
-  factura.estado = 'anulada';
-  factura.saldoPendiente = 0;
-
-  return factura;
+  return prisma.factura.update({
+    where: { id },
+    data: {
+      estado: 'anulada',
+      saldoPendiente: 0
+    },
+    include: {
+      cliente: true,
+      lineas: { include: { articulo: true } }
+    }
+  });
 };
 
-const actualizarSaldoFactura = (facturaId, montoCobrado) => {
-  const indice = db.facturas.findIndex(f => f.id === facturaId);
-  if (indice === -1) {
+const actualizarSaldoFactura = async (facturaId, montoCobrado) => {
+  const factura = await prisma.factura.findUnique({ where: { id: facturaId } });
+
+  if (!factura) {
     throw new ErrorApp('Factura no encontrada', 404);
   }
 
-  const factura = db.facturas[indice];
-  factura.saldoPendiente -= montoCobrado;
+  const nuevoSaldo = Number(factura.saldoPendiente) - montoCobrado;
+  let nuevoEstado = factura.estado;
 
-  if (factura.saldoPendiente <= 0) {
-    factura.saldoPendiente = 0;
-    factura.estado = 'cobrada';
-  } else if (factura.saldoPendiente < factura.total) {
-    factura.estado = 'cobrada_parcial';
+  if (nuevoSaldo <= 0) {
+    nuevoEstado = 'cobrada';
+  } else if (nuevoSaldo < Number(factura.total)) {
+    nuevoEstado = 'cobrada_parcial';
   }
 
-  return factura;
+  return prisma.factura.update({
+    where: { id: facturaId },
+    data: {
+      saldoPendiente: Math.max(0, nuevoSaldo),
+      estado: nuevoEstado
+    }
+  });
 };
 
 // ============ NOTAS DE CRÉDITO ============
 
-const listarNotasCredito = (filtros = {}) => {
-  let resultado = [...db.notasCredito];
+const listarNotasCredito = async (filtros = {}) => {
+  const where = {};
 
   if (filtros.clienteId) {
-    resultado = resultado.filter(nc => nc.clienteId === filtros.clienteId);
+    where.clienteId = filtros.clienteId;
   }
 
-  return resultado.map(nc => ({
-    ...nc,
-    cliente: db.clientes.find(c => c.id === nc.clienteId),
-    factura: db.facturas.find(f => f.id === nc.facturaId)
-  }));
+  return prisma.notaCredito.findMany({
+    where,
+    include: {
+      cliente: true,
+      factura: true,
+      lineas: { include: { articulo: true } }
+    },
+    orderBy: { creadoEn: 'desc' }
+  });
 };
 
-const obtenerNotaCredito = (id) => {
-  const notaCredito = db.notasCredito.find(nc => nc.id === id);
+const obtenerNotaCredito = async (id) => {
+  const notaCredito = await prisma.notaCredito.findUnique({
+    where: { id },
+    include: {
+      cliente: true,
+      factura: true,
+      lineas: { include: { articulo: true } }
+    }
+  });
+
   if (!notaCredito) {
     throw new ErrorApp('Nota de crédito no encontrada', 404);
   }
-
-  const lineasConArticulo = notaCredito.lineas.map(linea => ({
-    ...linea,
-    articulo: db.articulos.find(a => a.id === linea.articuloId)
-  }));
-
-  return {
-    ...notaCredito,
-    cliente: db.clientes.find(c => c.id === notaCredito.clienteId),
-    factura: db.facturas.find(f => f.id === notaCredito.facturaId),
-    lineas: lineasConArticulo
-  };
+  return notaCredito;
 };
 
-const crearNuevaNotaCredito = (datos) => {
+const crearNuevaNotaCredito = async (datos) => {
   if (!datos.facturaId) {
     throw new ErrorApp('La factura es requerida', 400);
   }
@@ -179,53 +230,80 @@ const crearNuevaNotaCredito = (datos) => {
     throw new ErrorApp('El motivo es requerido', 400);
   }
 
-  const factura = db.facturas.find(f => f.id === datos.facturaId);
+  const factura = await prisma.factura.findUnique({ where: { id: datos.facturaId } });
+
   if (!factura) {
     throw new ErrorApp('Factura no encontrada', 404);
   }
 
-  const cliente = db.clientes.find(c => c.id === factura.clienteId);
-  const notaCredito = crearNotaCredito(datos, factura, cliente);
+  const numero = await generarCodigoDesdeConteo(prisma, 'notaCredito', 'NC');
 
-  // Agregar líneas
+  let lineasData = [];
+  let subtotal = 0;
+
   if (datos.lineas && Array.isArray(datos.lineas)) {
     for (const lineaData of datos.lineas) {
-      const articulo = db.articulos.find(a => a.id === lineaData.articuloId);
-      const linea = crearNotaCreditoLinea({
+      const articulo = await prisma.articulo.findUnique({
+        where: { id: lineaData.articuloId }
+      });
+
+      const lineaSubtotal = lineaData.cantidad * lineaData.precioUnitario;
+      lineasData.push({
         articuloId: lineaData.articuloId,
         descripcion: lineaData.descripcion || (articulo ? articulo.nombre : 'Artículo'),
         cantidad: lineaData.cantidad,
-        precioUnitario: lineaData.precioUnitario
-      }, notaCredito.id);
-      notaCredito.lineas.push(linea);
+        precioUnitario: lineaData.precioUnitario,
+        subtotal: lineaSubtotal
+      });
+      subtotal += lineaSubtotal;
     }
   }
 
-  // Calcular totales
-  notaCredito.subtotal = notaCredito.lineas.reduce((sum, l) => sum + l.subtotal, 0);
-  notaCredito.montoIva = notaCredito.subtotal * (factura.porcentajeIva / 100);
-  notaCredito.total = notaCredito.subtotal + notaCredito.montoIva;
+  const montoIva = subtotal * (Number(factura.porcentajeIva) / 100);
+  const total = subtotal + montoIva;
 
-  db.notasCredito.push(notaCredito);
-  return notaCredito;
+  return prisma.notaCredito.create({
+    data: {
+      numero,
+      facturaId: datos.facturaId,
+      clienteId: factura.clienteId,
+      motivo: datos.motivo,
+      subtotal,
+      montoIva,
+      total,
+      lineas: { create: lineasData }
+    },
+    include: {
+      cliente: true,
+      factura: true,
+      lineas: { include: { articulo: true } }
+    }
+  });
 };
 
-const aplicarNotaCredito = (id) => {
-  const indice = db.notasCredito.findIndex(nc => nc.id === id);
-  if (indice === -1) {
+const aplicarNotaCredito = async (id) => {
+  const notaCredito = await prisma.notaCredito.findUnique({ where: { id } });
+
+  if (!notaCredito) {
     throw new ErrorApp('Nota de crédito no encontrada', 404);
   }
 
-  const notaCredito = db.notasCredito[indice];
   if (notaCredito.aplicada) {
     throw new ErrorApp('La nota de crédito ya fue aplicada', 400);
   }
 
   // Reducir saldo de la factura
-  actualizarSaldoFactura(notaCredito.facturaId, notaCredito.total);
-  notaCredito.aplicada = true;
+  await actualizarSaldoFactura(notaCredito.facturaId, Number(notaCredito.total));
 
-  return notaCredito;
+  return prisma.notaCredito.update({
+    where: { id },
+    data: { aplicada: true },
+    include: {
+      cliente: true,
+      factura: true,
+      lineas: { include: { articulo: true } }
+    }
+  });
 };
 
 module.exports = {

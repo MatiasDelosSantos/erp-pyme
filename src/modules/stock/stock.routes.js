@@ -16,4 +16,9 @@ router.post('/categorias', stockController.crearCategoria);
 router.put('/categorias/:id', stockController.actualizarCategoria);
 router.delete('/categorias/:id', stockController.eliminarCategoria);
 
+// Rutas de movimientos de stock
+router.post('/movimientos', stockController.registrarMovimiento);
+router.get('/movimientos', stockController.listarMovimientos);
+router.get('/control/:codpro', stockController.obtenerStockProducto);
+
 module.exports = router;

@@ -1,0 +1,405 @@
+// Schema Prisma para ERP PyME
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============ MÓDULO STOCK ============
+
+model Categoria {
+  id          String     @id @default(uuid())
+  codigo      String     @unique
+  nombre      String
+  descripcion String?
+  articulos   Articulo[]
+
+  @@map("categorias")
+}
+
+model Articulo {
+  id            String    @id @default(uuid())
+  codigo        String    @unique
+  nombre        String
+  descripcion   String    @default("")
+  precioCompra  Decimal   @default(0) @db.Decimal(12, 2)
+  precioVenta   Decimal   @default(0) @db.Decimal(12, 2)
+  stock         Int       @default(0)
+  codigoBarras  String?
+  activo        Boolean   @default(true)
+  creadoEn      DateTime  @default(now())
+  actualizadoEn DateTime  @updatedAt
+
+  categoriaId String?
+  categoria   Categoria? @relation(fields: [categoriaId], references: [id])
+
+  pedidoLineas      PedidoLinea[]
+  albaranLineas     AlbaranLinea[]
+  facturaLineas     FacturaLinea[]
+  notaCreditoLineas NotaCreditoLinea[]
+
+  stockControl      Stock?
+  movimientosStock  MovimientoStock[]
+  saleItems         SaleItem[]
+
+  @@map("articulos")
+}
+
+model Stock {
+  id      String @id @default(uuid())
+  codpro  String @unique
+  stocks  Int    @default(0)
+
+  articulo Articulo @relation(fields: [codpro], references: [codigo])
+
+  @@index([codpro])
+  @@map("stock")
+}
+
+model MovimientoStock {
+  id     String   @id @default(uuid())
+  codpro String
+  cantid Int
+  stocks Int      // stock anterior antes del movimiento
+  fchreg DateTime @default(now())
+
+  articulo Articulo @relation(fields: [codpro], references: [codigo])
+
+  @@index([codpro])
+  @@index([fchreg])
+  @@map("movimientos_stock")
+}
+
+// ============ MÓDULO VENTAS ============
+
+model Cliente {
+  id              String    @id @default(uuid())
+  codigo          String    @unique
+  nombre          String
+  tipoDocumento   String    @default("DNI")
+  numeroDocumento String    @default("")
+  direccion       String    @default("")
+  telefono        String?
+  email           String?
+  activo          Boolean   @default(true)
+  creadoEn        DateTime  @default(now())
+
+  pedidos      Pedido[]
+  albaranes    Albaran[]
+  facturas     Factura[]
+  notasCredito NotaCredito[]
+  cobros       Cobro[]
+  sales        Sale[]
+
+  @@map("clientes")
+}
+
+model Pedido {
+  id            String   @id @default(uuid())
+  numero        String   @unique
+  fecha         DateTime @default(now())
+  estado        String   @default("borrador") // borrador, confirmado, entregado, cancelado
+  observaciones String?
+  total         Decimal  @default(0) @db.Decimal(12, 2)
+  creadoEn      DateTime @default(now())
+
+  clienteId String
+  cliente   Cliente @relation(fields: [clienteId], references: [id])
+
+  lineas    PedidoLinea[]
+  albaranes Albaran[]
+  facturas  Factura[]
+
+  @@map("pedidos")
+}
+
+model PedidoLinea {
+  id             String  @id @default(uuid())
+  cantidad       Int
+  precioUnitario Decimal @db.Decimal(12, 2)
+  subtotal       Decimal @db.Decimal(12, 2)
+
+  pedidoId   String
+  pedido     Pedido   @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  articuloId String
+  articulo   Articulo @relation(fields: [articuloId], references: [id])
+
+  @@map("pedido_lineas")
+}
+
+model Albaran {
+  id            String   @id @default(uuid())
+  numero        String   @unique
+  fecha         DateTime @default(now())
+  observaciones String?
+  creadoEn      DateTime @default(now())
+
+  pedidoId  String
+  pedido    Pedido  @relation(fields: [pedidoId], references: [id])
+  clienteId String
+  cliente   Cliente @relation(fields: [clienteId], references: [id])
+
+  lineas AlbaranLinea[]
+
+  @@map("albaranes")
+}
+
+model AlbaranLinea {
+  id                String @id @default(uuid())
+  cantidadEntregada Int
+
+  albaranId  String
+  albaran    Albaran  @relation(fields: [albaranId], references: [id], onDelete: Cascade)
+  articuloId String
+  articulo   Articulo @relation(fields: [articuloId], references: [id])
+
+  @@map("albaran_lineas")
+}
+
+// ============ MÓDULO FACTURACIÓN ============
+
+model Factura {
+  id               String   @id @default(uuid())
+  numero           String   @unique
+  fecha            DateTime @default(now())
+  fechaVencimiento DateTime
+  subtotal         Decimal  @default(0) @db.Decimal(12, 2)
+  porcentajeIva    Decimal  @default(21) @db.Decimal(5, 2)
+  montoIva         Decimal  @default(0) @db.Decimal(12, 2)
+  total            Decimal  @default(0) @db.Decimal(12, 2)
+  estado           String   @default("pendiente") // pendiente, cobrada_parcial, cobrada, anulada
+  saldoPendiente   Decimal  @default(0) @db.Decimal(12, 2)
+  observaciones    String?
+  creadoEn         DateTime @default(now())
+
+  clienteId String
+  cliente   Cliente @relation(fields: [clienteId], references: [id])
+  pedidoId  String?
+  pedido    Pedido? @relation(fields: [pedidoId], references: [id])
+
+  lineas       FacturaLinea[]
+  notasCredito NotaCredito[]
+  cobros       Cobro[]
+
+  @@map("facturas")
+}
+
+model FacturaLinea {
+  id             String  @id @default(uuid())
+  descripcion    String
+  cantidad       Int
+  precioUnitario Decimal @db.Decimal(12, 2)
+  subtotal       Decimal @db.Decimal(12, 2)
+
+  facturaId  String
+  factura    Factura  @relation(fields: [facturaId], references: [id], onDelete: Cascade)
+  articuloId String
+  articulo   Articulo @relation(fields: [articuloId], references: [id])
+
+  @@map("factura_lineas")
+}
+
+model NotaCredito {
+  id       String   @id @default(uuid())
+  numero   String   @unique
+  fecha    DateTime @default(now())
+  motivo   String
+  subtotal Decimal  @default(0) @db.Decimal(12, 2)
+  montoIva Decimal  @default(0) @db.Decimal(12, 2)
+  total    Decimal  @default(0) @db.Decimal(12, 2)
+  aplicada Boolean  @default(false)
+  creadoEn DateTime @default(now())
+
+  facturaId String
+  factura   Factura @relation(fields: [facturaId], references: [id])
+  clienteId String
+  cliente   Cliente @relation(fields: [clienteId], references: [id])
+
+  lineas NotaCreditoLinea[]
+
+  @@map("notas_credito")
+}
+
+model NotaCreditoLinea {
+  id             String  @id @default(uuid())
+  descripcion    String
+  cantidad       Int
+  precioUnitario Decimal @db.Decimal(12, 2)
+  subtotal       Decimal @db.Decimal(12, 2)
+
+  notaCreditoId String
+  notaCredito   NotaCredito @relation(fields: [notaCreditoId], references: [id], onDelete: Cascade)
+  articuloId    String
+  articulo      Articulo    @relation(fields: [articuloId], references: [id])
+
+  @@map("nota_credito_lineas")
+}
+
+// ============ MÓDULO TESORERÍA ============
+
+model CuentaBancaria {
+  id           String   @id @default(uuid())
+  nombre       String
+  numeroCuenta String   @default("")
+  banco        String   @default("")
+  saldo        Decimal  @default(0) @db.Decimal(12, 2)
+  activa       Boolean  @default(true)
+  creadoEn     DateTime @default(now())
+
+  cobros Cobro[]
+  pagos  Pago[]
+
+  @@map("cuentas_bancarias")
+}
+
+model Proveedor {
+  id              String   @id @default(uuid())
+  codigo          String   @unique
+  nombre          String
+  tipoDocumento   String   @default("CUIT")
+  numeroDocumento String   @default("")
+  direccion       String   @default("")
+  telefono        String?
+  email           String?
+  activo          Boolean  @default(true)
+  creadoEn        DateTime @default(now())
+
+  pagos Pago[]
+
+  @@map("proveedores")
+}
+
+model Cobro {
+  id            String   @id @default(uuid())
+  numero        String   @unique
+  fecha         DateTime @default(now())
+  monto         Decimal  @db.Decimal(12, 2)
+  metodoPago    String   @default("efectivo") // efectivo, transferencia, cheque, tarjeta
+  referencia    String?
+  observaciones String?
+  anulado       Boolean  @default(false)
+  creadoEn      DateTime @default(now())
+
+  clienteId        String
+  cliente          Cliente         @relation(fields: [clienteId], references: [id])
+  facturaId        String
+  factura          Factura         @relation(fields: [facturaId], references: [id])
+  cuentaBancariaId String?
+  cuentaBancaria   CuentaBancaria? @relation(fields: [cuentaBancariaId], references: [id])
+
+  @@map("cobros")
+}
+
+model Pago {
+  id         String   @id @default(uuid())
+  numero     String   @unique
+  fecha      DateTime @default(now())
+  monto      Decimal  @db.Decimal(12, 2)
+  metodoPago String   @default("transferencia")
+  concepto   String
+  referencia String?
+  anulado    Boolean  @default(false)
+  creadoEn   DateTime @default(now())
+
+  proveedorId      String
+  proveedor        Proveedor       @relation(fields: [proveedorId], references: [id])
+  cuentaBancariaId String?
+  cuentaBancaria   CuentaBancaria? @relation(fields: [cuentaBancariaId], references: [id])
+
+  @@map("pagos")
+}
+
+// ============ MÓDULO CONTABILIDAD ============
+
+model CuentaContable {
+  id     String  @id @default(uuid())
+  codigo String  @unique
+  nombre String
+  tipo   String // activo, pasivo, patrimonio, ingreso, egreso
+  saldo  Decimal @default(0) @db.Decimal(12, 2)
+  activa Boolean @default(true)
+
+  movimientos AsientoMovimiento[]
+
+  @@map("cuentas_contables")
+}
+
+model Asiento {
+  id          String   @id @default(uuid())
+  numero      Int      @unique @default(autoincrement())
+  fecha       DateTime @default(now())
+  descripcion String
+  creadoEn    DateTime @default(now())
+
+  movimientos AsientoMovimiento[]
+
+  @@map("asientos")
+}
+
+model AsientoMovimiento {
+  id          String  @id @default(uuid())
+  debe        Decimal @default(0) @db.Decimal(12, 2)
+  haber       Decimal @default(0) @db.Decimal(12, 2)
+  descripcion String?
+
+  asientoId        String
+  asiento          Asiento        @relation(fields: [asientoId], references: [id], onDelete: Cascade)
+  cuentaContableId String
+  cuentaContable   CuentaContable @relation(fields: [cuentaContableId], references: [id])
+
+  @@map("asiento_movimientos")
+}
+
+// ============ MÓDULO SALES (MVP) ============
+
+model Sale {
+  id        String   @id @default(uuid())
+  clienteId String
+  fecha     DateTime @default(now())
+  moneda    String   @default("ARS")
+  estado    String   @default("DRAFT") // DRAFT | CONFIRMED
+  total     Decimal  @default(0) @db.Decimal(12, 2)
+  creadoEn  DateTime @default(now())
+
+  cliente Cliente    @relation(fields: [clienteId], references: [id])
+  items   SaleItem[]
+
+  @@index([clienteId])
+  @@index([estado])
+  @@map("sales")
+}
+
+model SaleItem {
+  id             String  @id @default(uuid())
+  saleId         String
+  codpro         String
+  cantidad       Int
+  precioUnitario Decimal @db.Decimal(12, 2)
+  subtotal       Decimal @db.Decimal(12, 2)
+
+  sale     Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  articulo Articulo @relation(fields: [codpro], references: [codigo])
+
+  @@index([saleId])
+  @@index([codpro])
+  @@map("sale_items")
+}
+
+// ============ MÓDULO AUTENTICACIÓN ============
+
+model Usuario {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  passwordHash  String
+  nombre        String
+  rol           String   @default("admin") // admin, operador
+  activo        Boolean  @default(true)
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+
+  @@map("usuarios")
+}
