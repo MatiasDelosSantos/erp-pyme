@@ -186,6 +186,7 @@ model Factura {
   lineas       FacturaLinea[]
   notasCredito NotaCredito[]
   cobros       Cobro[]
+  sale         Sale?
 
   @@index([clienteId])
   @@index([estado])
@@ -368,12 +369,14 @@ model Sale {
   clienteId String
   fecha     DateTime @default(now())
   moneda    String   @default("ARS")
-  estado    String   @default("DRAFT") // DRAFT | CONFIRMED
+  estado    String   @default("DRAFT") // DRAFT | CONFIRMED | INVOICED
   total     Decimal  @default(0) @db.Decimal(12, 2)
+  facturaId String?  @unique
   creadoEn  DateTime @default(now())
 
   cliente Cliente    @relation(fields: [clienteId], references: [id])
   items   SaleItem[]
+  factura Factura?   @relation(fields: [facturaId], references: [id])
 
   @@index([clienteId])
   @@index([estado])

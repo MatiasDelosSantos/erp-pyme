@@ -190,8 +190,9 @@ export interface Sale {
   clienteId: string;
   fecha: string;
   moneda: string;
-  estado: "DRAFT" | "CONFIRMED";
+  estado: "DRAFT" | "CONFIRMED" | "INVOICED";
   total: number | string;
+  facturaId: string | null;
   cliente: { id: string; codigo: string; nombre: string };
   items: SaleItem[];
 }
@@ -226,6 +227,8 @@ export const salesApi = {
     }),
   confirmar: (id: string) =>
     fetchApi<Sale>(`/ventas/sales/${id}/confirm`, { method: "POST" }),
+  generarFactura: (id: string) =>
+    fetchApi<Factura>(`/ventas/sales/${id}/invoice`, { method: "POST" }),
   eliminar: (id: string) =>
     fetchApi<{ mensaje: string }>(`/ventas/sales/${id}`, { method: "DELETE" }),
 };
@@ -311,6 +314,10 @@ export const ERROR_MESSAGES: Record<string, string> = {
   PAYMENT_NOT_FOUND: "Cobro no encontrado",
   // Facturas
   CANNOT_VOID_PAID_INVOICE: "No se puede anular una factura pagada",
+  // Ventas
+  SALE_NOT_FOUND: "Venta no encontrada",
+  SALE_NOT_CONFIRMED: "Solo se pueden facturar ventas confirmadas",
+  SALE_ALREADY_INVOICED: "Esta venta ya tiene una factura generada",
   // General
   INTERNAL_ERROR: "Error interno del servidor",
 };

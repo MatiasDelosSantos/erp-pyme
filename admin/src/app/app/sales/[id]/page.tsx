@@ -15,8 +15,8 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { salesApi, type Sale } from "@/lib/api";
-import { ArrowLeft, CheckCircle, Trash2 } from "lucide-react";
+import { salesApi, type Sale, getErrorMessage } from "@/lib/api";
+import { ArrowLeft, CheckCircle, Trash2, FileText, ExternalLink } from "lucide-react";
 
 export default function SaleDetailPage() {
   const params = useParams();
@@ -65,6 +65,20 @@ export default function SaleDetailPage() {
       router.push("/app/sales");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Error al eliminar");
+    }
+  };
+
+  const handleGenerarFactura = async () => {
+    if (!sale) return;
+    if (!confirm(`¿Generar factura por $${(Number(sale.total) * 1.21).toFixed(2)} (incluye 21% IVA)?`)) {
+      return;
+    }
+    try {
+      const factura = await salesApi.generarFactura(sale.id);
+      toast.success(`Factura ${factura.numero} generada correctamente`);
+      router.push(`/app/invoices/${factura.id}`);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -127,6 +141,20 @@ export default function SaleDetailPage() {
                 Eliminar
               </Button>
             </>
+          )}
+          {sale.estado === "CONFIRMED" && (
+            <Button onClick={handleGenerarFactura}>
+              <FileText className="h-4 w-4 mr-2" />
+              Generar Factura
+            </Button>
+          )}
+          {sale.estado === "INVOICED" && sale.facturaId && (
+            <Link href={`/app/invoices/${sale.facturaId}`}>
+              <Button variant="outline">
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Ver Factura
+              </Button>
+            </Link>
           )}
         </div>
       </div>
@@ -205,11 +233,17 @@ export default function SaleDetailPage() {
             <CardContent className="space-y-4">
               <div className="flex justify-between items-center">
                 <span>Estado:</span>
-                {sale.estado === "DRAFT" ? (
+                {sale.estado === "DRAFT" && (
                   <Badge variant="secondary">Borrador</Badge>
-                ) : (
+                )}
+                {sale.estado === "CONFIRMED" && (
                   <Badge className="bg-green-100 text-green-800">
                     Confirmada
+                  </Badge>
+                )}
+                {sale.estado === "INVOICED" && (
+                  <Badge className="bg-blue-100 text-blue-800">
+                    Facturada
                   </Badge>
                 )}
               </div>
@@ -241,6 +275,17 @@ export default function SaleDetailPage() {
                   <p className="text-sm text-green-600 flex items-center gap-2">
                     <CheckCircle className="h-4 w-4" />
                     Venta confirmada - Stock descontado
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-2">
+                    Podés generar la factura usando el botón superior
+                  </p>
+                </div>
+              )}
+              {sale.estado === "INVOICED" && (
+                <div className="pt-4 border-t">
+                  <p className="text-sm text-blue-600 flex items-center gap-2">
+                    <FileText className="h-4 w-4" />
+                    Venta facturada
                   </p>
                 </div>
               )}

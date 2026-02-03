@@ -1,5 +1,8 @@
 const prisma = require('../../shared/data/prisma');
 const { ErrorApp } = require('../../shared/middlewares/errorHandler');
+const { generarCodigoDesdeConteo } = require('../../shared/utils/generadorCodigo');
+
+const IVA_DEFECTO = 21;
 
 // ============ SALES ============
 
@@ -288,11 +291,117 @@ const eliminarSale = async (saleId) => {
   return { mensaje: 'Venta eliminada correctamente' };
 };
 
+/**
+ * Genera una factura a partir de una venta confirmada.
+ *
+ * Error codes:
+ * - SALE_NOT_FOUND: venta no existe
+ * - SALE_NOT_CONFIRMED: venta no está confirmada
+ * - SALE_ALREADY_INVOICED: venta ya tiene factura
+ */
+const generarFactura = async (saleId, opciones = {}) => {
+  const result = await prisma.$transaction(async (tx) => {
+    // 1. Obtener la venta con items
+    const sale = await tx.sale.findUnique({
+      where: { id: saleId },
+      include: {
+        cliente: true,
+        items: {
+          include: {
+            articulo: { select: { id: true, codigo: true, nombre: true } }
+          }
+        }
+      }
+    });
+
+    if (!sale) {
+      const error = new Error('SALE_NOT_FOUND');
+      error.code = 'SALE_NOT_FOUND';
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (sale.estado !== 'CONFIRMED') {
+      const error = new Error('SALE_NOT_CONFIRMED');
+      error.code = 'SALE_NOT_CONFIRMED';
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (sale.facturaId) {
+      const error = new Error('SALE_ALREADY_INVOICED');
+      error.code = 'SALE_ALREADY_INVOICED';
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // 2. Generar número de factura
+    const numero = await generarCodigoDesdeConteo(tx, 'factura', 'FAC');
+    const porcentajeIva = opciones.porcentajeIva || IVA_DEFECTO;
+
+    // 3. Calcular totales
+    const subtotal = Number(sale.total);
+    const montoIva = subtotal * (porcentajeIva / 100);
+    const total = subtotal + montoIva;
+
+    // 4. Fecha de vencimiento (30 días por defecto)
+    const fechaVencimiento = opciones.fechaVencimiento
+      ? new Date(opciones.fechaVencimiento)
+      : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+    // 5. Crear líneas de factura desde items de venta
+    const lineasData = sale.items.map(item => ({
+      articuloId: item.articulo.id,
+      descripcion: item.articulo.nombre,
+      cantidad: item.cantidad,
+      precioUnitario: Number(item.precioUnitario),
+      subtotal: Number(item.subtotal)
+    }));
+
+    // 6. Crear la factura
+    const factura = await tx.factura.create({
+      data: {
+        numero,
+        fechaVencimiento,
+        moneda: sale.moneda,
+        clienteId: sale.clienteId,
+        subtotal,
+        porcentajeIva,
+        montoIva,
+        total,
+        importeCobrado: 0,
+        saldoPendiente: total,
+        estado: 'ISSUED',
+        observaciones: opciones.observaciones || null,
+        lineas: { create: lineasData }
+      },
+      include: {
+        cliente: { select: { id: true, codigo: true, nombre: true } },
+        lineas: { include: { articulo: { select: { codigo: true, nombre: true } } } }
+      }
+    });
+
+    // 7. Actualizar la venta con el ID de la factura y cambiar estado
+    await tx.sale.update({
+      where: { id: saleId },
+      data: {
+        facturaId: factura.id,
+        estado: 'INVOICED'
+      }
+    });
+
+    return factura;
+  });
+
+  return result;
+};
+
 module.exports = {
   listarSales,
   obtenerSale,
   crearSale,
   actualizarItems,
   confirmarSale,
-  eliminarSale
+  eliminarSale,
+  generarFactura
 };

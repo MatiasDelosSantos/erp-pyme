@@ -71,11 +71,22 @@ const eliminarSale = asyncHandler(async (req, res) => {
   res.json({ exito: true, ...result });
 });
 
+const generarFactura = asyncHandler(async (req, res) => {
+  const opciones = {
+    porcentajeIva: req.body.porcentajeIva,
+    fechaVencimiento: req.body.fechaVencimiento,
+    observaciones: req.body.observaciones
+  };
+  const factura = await salesService.generarFactura(req.params.id, opciones);
+  res.status(201).json({ exito: true, datos: factura });
+});
+
 module.exports = {
   listarSales,
   obtenerSale,
   crearSale,
   actualizarItems,
   confirmarSale,
-  eliminarSale
+  eliminarSale,
+  generarFactura
 };

@@ -29,6 +29,7 @@ router.get('/sales/:id', salesController.obtenerSale);
 router.post('/sales', salesController.crearSale);
 router.put('/sales/:id/items', salesController.actualizarItems);
 router.post('/sales/:id/confirm', salesController.confirmarSale);
+router.post('/sales/:id/invoice', salesController.generarFactura);
 router.delete('/sales/:id', salesController.eliminarSale);
 
 module.exports = router;
