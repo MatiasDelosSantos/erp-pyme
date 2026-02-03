@@ -4,12 +4,21 @@ interface ApiResponse<T> {
   exito: boolean;
   datos?: T;
   mensaje?: string;
+  error?: {
+    code: string;
+    details?: Record<string, unknown>;
+  };
 }
 
-class ApiError extends Error {
-  constructor(message: string, public status: number) {
+export class ApiError extends Error {
+  code?: string;
+  details?: Record<string, unknown>;
+
+  constructor(message: string, public status: number, code?: string, details?: Record<string, unknown>) {
     super(message);
     this.name = "ApiError";
+    this.code = code;
+    this.details = details;
   }
 }
 
@@ -30,6 +39,16 @@ async function fetchApi<T>(
   const data: ApiResponse<T> = await response.json();
 
   if (!data.exito) {
+    // Nuevo formato con error codes
+    if (data.error?.code) {
+      throw new ApiError(
+        data.error.code,
+        response.status,
+        data.error.code,
+        data.error.details
+      );
+    }
+    // Formato antiguo con mensaje
     throw new ApiError(data.mensaje || "Error desconocido", response.status);
   }
 
@@ -210,3 +229,98 @@ export const salesApi = {
   eliminar: (id: string) =>
     fetchApi<{ mensaje: string }>(`/ventas/sales/${id}`, { method: "DELETE" }),
 };
+
+// Facturas
+export interface Factura {
+  id: string;
+  numero: string;
+  fecha: string;
+  fechaVencimiento: string;
+  moneda: string;
+  subtotal: number | string;
+  porcentajeIva: number | string;
+  montoIva: number | string;
+  total: number | string;
+  importeCobrado: number | string;
+  saldoPendiente: number | string;
+  estado: "ISSUED" | "PARTIALLY_PAID" | "PAID" | "VOID";
+  observaciones: string | null;
+  cliente: { id: string; codigo: string; nombre: string };
+  lineas: FacturaLinea[];
+}
+
+export interface FacturaLinea {
+  id: string;
+  descripcion: string;
+  cantidad: number;
+  precioUnitario: number | string;
+  subtotal: number | string;
+  articulo: { codigo: string; nombre: string };
+}
+
+export const facturasApi = {
+  listar: (estado?: string) =>
+    fetchApi<Factura[]>(`/facturacion/facturas${estado ? `?estado=${estado}` : ""}`),
+  obtener: (id: string) => fetchApi<Factura>(`/facturacion/facturas/${id}`),
+  anular: (id: string) =>
+    fetchApi<Factura>(`/facturacion/facturas/${id}/anular`, { method: "PATCH" }),
+};
+
+// Cobros (Payments)
+export interface Cobro {
+  id: string;
+  numero: string;
+  fecha: string;
+  monto: number | string;
+  moneda: string;
+  metodoPago: "CASH" | "TRANSFER" | "CARD" | "OTHER";
+  referencia: string | null;
+  observaciones: string | null;
+  cliente?: { id: string; codigo: string; nombre: string };
+  factura?: { id: string; numero: string };
+}
+
+export interface CobroInput {
+  facturaId: string;
+  monto: number;
+  metodoPago: "CASH" | "TRANSFER" | "CARD" | "OTHER";
+  referencia?: string;
+}
+
+export const cobrosApi = {
+  listarPorFactura: (facturaId: string) =>
+    fetchApi<Cobro[]>(`/facturacion/facturas/${facturaId}/cobros`),
+  registrar: (data: CobroInput) =>
+    fetchApi<Cobro>("/tesoreria/cobros", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  anular: (id: string) =>
+    fetchApi<{ exito: boolean }>(`/tesoreria/cobros/${id}`, { method: "DELETE" }),
+};
+
+// Traducciones de error codes a mensajes en español
+export const ERROR_MESSAGES: Record<string, string> = {
+  // Cobros
+  INVALID_AMOUNT: "El importe debe ser mayor a cero",
+  INVOICE_NOT_FOUND: "Factura no encontrada",
+  INVOICE_VOIDED: "No se puede cobrar una factura anulada",
+  INVOICE_ALREADY_PAID: "La factura ya se encuentra pagada",
+  OVERPAYMENT_NOT_ALLOWED: "El importe supera el saldo pendiente",
+  CURRENCY_MISMATCH: "La moneda del cobro no coincide con la de la factura",
+  PAYMENT_NOT_FOUND: "Cobro no encontrado",
+  // Facturas
+  CANNOT_VOID_PAID_INVOICE: "No se puede anular una factura pagada",
+  // General
+  INTERNAL_ERROR: "Error interno del servidor",
+};
+
+export function getErrorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.code) {
+    return ERROR_MESSAGES[error.code] || error.code;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return "Error desconocido";
+}

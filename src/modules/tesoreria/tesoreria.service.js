@@ -77,106 +77,225 @@ const obtenerCobro = async (id) => {
   });
 
   if (!cobro) {
-    throw new ErrorApp('Cobro no encontrado', 404);
+    const error = new Error('PAYMENT_NOT_FOUND');
+    error.code = 'PAYMENT_NOT_FOUND';
+    error.statusCode = 404;
+    throw error;
   }
   return cobro;
 };
 
-const registrarCobro = async (datos) => {
-  if (!datos.facturaId) {
-    throw new ErrorApp('La factura es requerida', 400);
-  }
-  if (!datos.monto || datos.monto <= 0) {
-    throw new ErrorApp('El monto debe ser mayor a cero', 400);
-  }
-
-  const factura = await prisma.factura.findUnique({ where: { id: datos.facturaId } });
+const listarCobrosPorFactura = async (facturaId) => {
+  const factura = await prisma.factura.findUnique({
+    where: { id: facturaId }
+  });
 
   if (!factura) {
-    throw new ErrorApp('Factura no encontrada', 404);
-  }
-  if (factura.estado === 'anulada') {
-    throw new ErrorApp('No se puede cobrar una factura anulada', 400);
-  }
-  if (factura.estado === 'cobrada') {
-    throw new ErrorApp('La factura ya está cobrada', 400);
-  }
-  if (datos.monto > Number(factura.saldoPendiente)) {
-    throw new ErrorApp('El monto excede el saldo pendiente', 400);
+    const error = new Error('INVOICE_NOT_FOUND');
+    error.code = 'INVOICE_NOT_FOUND';
+    error.statusCode = 404;
+    throw error;
   }
 
-  const numero = await generarCodigoDesdeConteo(prisma, 'cobro', 'COB');
-
-  // Crear cobro
-  const cobro = await prisma.cobro.create({
-    data: {
-      numero,
-      fecha: datos.fecha ? new Date(datos.fecha) : new Date(),
-      clienteId: factura.clienteId,
-      facturaId: datos.facturaId,
-      monto: datos.monto,
-      metodoPago: datos.metodoPago || 'efectivo',
-      cuentaBancariaId: datos.cuentaBancariaId || null,
-      referencia: datos.referencia || null,
-      observaciones: datos.observaciones || null
+  return prisma.cobro.findMany({
+    where: {
+      facturaId,
+      anulado: false
     },
+    orderBy: { fecha: 'desc' }
+  });
+};
+
+/**
+ * Registra un cobro usando transacción para garantizar consistencia.
+ *
+ * Error codes:
+ * - INVALID_AMOUNT: monto <= 0 o no proporcionado
+ * - INVOICE_NOT_FOUND: factura no existe
+ * - INVOICE_VOIDED: factura anulada
+ * - INVOICE_ALREADY_PAID: factura ya cobrada completamente
+ * - OVERPAYMENT_NOT_ALLOWED: monto excede saldo pendiente
+ * - CURRENCY_MISMATCH: moneda del cobro no coincide con la factura
+ */
+const registrarCobro = async (datos) => {
+  // Validación de monto
+  if (!datos.monto || datos.monto <= 0) {
+    const error = new Error('INVALID_AMOUNT');
+    error.code = 'INVALID_AMOUNT';
+    error.statusCode = 400;
+    throw error;
+  }
+
+  // Ejecutar todo en transacción
+  const result = await prisma.$transaction(async (tx) => {
+    // 1. Obtener factura con bloqueo
+    const factura = await tx.factura.findUnique({
+      where: { id: datos.facturaId }
+    });
+
+    if (!factura) {
+      const error = new Error('INVOICE_NOT_FOUND');
+      error.code = 'INVOICE_NOT_FOUND';
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (factura.estado === 'VOID' || factura.estado === 'anulada') {
+      const error = new Error('INVOICE_VOIDED');
+      error.code = 'INVOICE_VOIDED';
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (factura.estado === 'PAID' || factura.estado === 'cobrada') {
+      const error = new Error('INVOICE_ALREADY_PAID');
+      error.code = 'INVOICE_ALREADY_PAID';
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // Validar moneda si se especifica
+    const monedaCobro = datos.moneda || factura.moneda || 'ARS';
+    if (monedaCobro !== (factura.moneda || 'ARS')) {
+      const error = new Error('CURRENCY_MISMATCH');
+      error.code = 'CURRENCY_MISMATCH';
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // Validar que no exceda el saldo
+    const saldoPendiente = Number(factura.saldoPendiente);
+    if (datos.monto > saldoPendiente) {
+      const error = new Error('OVERPAYMENT_NOT_ALLOWED');
+      error.code = 'OVERPAYMENT_NOT_ALLOWED';
+      error.statusCode = 400;
+      error.details = { saldoPendiente, montoIntentado: datos.monto };
+      throw error;
+    }
+
+    // 2. Generar número de cobro
+    const numero = await generarCodigoDesdeConteo(tx, 'cobro', 'COB');
+
+    // 3. Crear el cobro
+    const cobro = await tx.cobro.create({
+      data: {
+        numero,
+        fecha: datos.fecha ? new Date(datos.fecha) : new Date(),
+        clienteId: factura.clienteId,
+        facturaId: datos.facturaId,
+        monto: datos.monto,
+        moneda: monedaCobro,
+        metodoPago: datos.metodoPago || 'CASH',
+        cuentaBancariaId: datos.cuentaBancariaId || null,
+        referencia: datos.referencia || null,
+        observaciones: datos.observaciones || null
+      }
+    });
+
+    // 4. Calcular nuevos valores de la factura
+    const nuevoImporteCobrado = Number(factura.importeCobrado || 0) + datos.monto;
+    const nuevoSaldoPendiente = Number(factura.total) - nuevoImporteCobrado;
+
+    let nuevoEstado;
+    if (nuevoSaldoPendiente <= 0) {
+      nuevoEstado = 'PAID';
+    } else if (nuevoImporteCobrado > 0) {
+      nuevoEstado = 'PARTIALLY_PAID';
+    } else {
+      nuevoEstado = 'ISSUED';
+    }
+
+    // 5. Actualizar factura
+    await tx.factura.update({
+      where: { id: factura.id },
+      data: {
+        importeCobrado: nuevoImporteCobrado,
+        saldoPendiente: Math.max(0, nuevoSaldoPendiente),
+        estado: nuevoEstado
+      }
+    });
+
+    // 6. Actualizar cuenta bancaria si aplica
+    if (datos.cuentaBancariaId && datos.metodoPago !== 'CASH') {
+      await tx.cuentaBancaria.update({
+        where: { id: datos.cuentaBancariaId },
+        data: { saldo: { increment: datos.monto } }
+      });
+    }
+
+    return cobro;
+  });
+
+  // Retornar cobro con relaciones
+  return prisma.cobro.findUnique({
+    where: { id: result.id },
     include: {
       cliente: true,
       factura: true,
       cuentaBancaria: true
     }
   });
-
-  // Actualizar saldo de la factura
-  await facturacionService.actualizarSaldoFactura(factura.id, datos.monto);
-
-  // Actualizar saldo de cuenta bancaria si aplica
-  if (datos.cuentaBancariaId && datos.metodoPago !== 'efectivo') {
-    await prisma.cuentaBancaria.update({
-      where: { id: datos.cuentaBancariaId },
-      data: { saldo: { increment: datos.monto } }
-    });
-  }
-
-  return cobro;
 };
 
+/**
+ * Anula un cobro usando transacción.
+ *
+ * Error codes:
+ * - PAYMENT_NOT_FOUND: cobro no existe o ya anulado
+ */
 const anularCobro = async (id) => {
-  const cobro = await prisma.cobro.findFirst({
-    where: { id, anulado: false }
-  });
+  await prisma.$transaction(async (tx) => {
+    const cobro = await tx.cobro.findFirst({
+      where: { id, anulado: false }
+    });
 
-  if (!cobro) {
-    throw new ErrorApp('Cobro no encontrado', 404);
-  }
+    if (!cobro) {
+      const error = new Error('PAYMENT_NOT_FOUND');
+      error.code = 'PAYMENT_NOT_FOUND';
+      error.statusCode = 404;
+      throw error;
+    }
 
-  // Revertir el saldo de la factura
-  const factura = await prisma.factura.findUnique({ where: { id: cobro.facturaId } });
-  if (factura) {
-    const nuevoSaldo = Number(factura.saldoPendiente) + Number(cobro.monto);
-    await prisma.factura.update({
-      where: { id: factura.id },
-      data: {
-        saldoPendiente: nuevoSaldo,
-        estado: nuevoSaldo >= Number(factura.total) ? 'pendiente' : 'cobrada_parcial'
+    // Revertir el saldo de la factura
+    const factura = await tx.factura.findUnique({ where: { id: cobro.facturaId } });
+    if (factura) {
+      const nuevoImporteCobrado = Math.max(0, Number(factura.importeCobrado || 0) - Number(cobro.monto));
+      const nuevoSaldo = Number(factura.total) - nuevoImporteCobrado;
+
+      let nuevoEstado;
+      if (nuevoImporteCobrado <= 0) {
+        nuevoEstado = 'ISSUED';
+      } else if (nuevoSaldo > 0) {
+        nuevoEstado = 'PARTIALLY_PAID';
+      } else {
+        nuevoEstado = 'PAID';
       }
-    });
-  }
 
-  // Revertir saldo de cuenta bancaria
-  if (cobro.cuentaBancariaId) {
-    await prisma.cuentaBancaria.update({
-      where: { id: cobro.cuentaBancariaId },
-      data: { saldo: { decrement: Number(cobro.monto) } }
-    });
-  }
+      await tx.factura.update({
+        where: { id: factura.id },
+        data: {
+          importeCobrado: nuevoImporteCobrado,
+          saldoPendiente: nuevoSaldo,
+          estado: nuevoEstado
+        }
+      });
+    }
 
-  await prisma.cobro.update({
-    where: { id },
-    data: { anulado: true }
+    // Revertir saldo de cuenta bancaria
+    if (cobro.cuentaBancariaId) {
+      await tx.cuentaBancaria.update({
+        where: { id: cobro.cuentaBancariaId },
+        data: { saldo: { decrement: Number(cobro.monto) } }
+      });
+    }
+
+    await tx.cobro.update({
+      where: { id },
+      data: { anulado: true }
+    });
   });
 
-  return { mensaje: 'Cobro anulado correctamente' };
+  return { success: true };
 };
 
 // ============ PAGOS ============
@@ -375,6 +494,7 @@ module.exports = {
   crearNuevaCuentaBancaria,
   actualizarCuentaBancaria,
   listarCobros,
+  listarCobrosPorFactura,
   obtenerCobro,
   registrarCobro,
   anularCobro,

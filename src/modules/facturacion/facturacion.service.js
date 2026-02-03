@@ -120,13 +120,16 @@ const crearNuevaFactura = async (datos) => {
     data: {
       numero,
       fechaVencimiento,
+      moneda: datos.moneda || 'ARS',
       clienteId: datos.clienteId,
       pedidoId: datos.pedidoId || null,
       subtotal,
       porcentajeIva,
       montoIva,
       total,
+      importeCobrado: 0,
       saldoPendiente: total,
+      estado: 'ISSUED',
       observaciones: datos.observaciones || null,
       lineas: { create: lineasData }
     },
@@ -141,17 +144,23 @@ const anularFactura = async (id) => {
   const factura = await prisma.factura.findUnique({ where: { id } });
 
   if (!factura) {
-    throw new ErrorApp('Factura no encontrada', 404);
+    const error = new Error('INVOICE_NOT_FOUND');
+    error.code = 'INVOICE_NOT_FOUND';
+    error.statusCode = 404;
+    throw error;
   }
 
-  if (factura.estado === 'cobrada') {
-    throw new ErrorApp('No se puede anular una factura cobrada', 400);
+  if (factura.estado === 'PAID' || factura.estado === 'cobrada') {
+    const error = new Error('CANNOT_VOID_PAID_INVOICE');
+    error.code = 'CANNOT_VOID_PAID_INVOICE';
+    error.statusCode = 400;
+    throw error;
   }
 
   return prisma.factura.update({
     where: { id },
     data: {
-      estado: 'anulada',
+      estado: 'VOID',
       saldoPendiente: 0
     },
     include: {
@@ -165,21 +174,28 @@ const actualizarSaldoFactura = async (facturaId, montoCobrado) => {
   const factura = await prisma.factura.findUnique({ where: { id: facturaId } });
 
   if (!factura) {
-    throw new ErrorApp('Factura no encontrada', 404);
+    const error = new Error('INVOICE_NOT_FOUND');
+    error.code = 'INVOICE_NOT_FOUND';
+    error.statusCode = 404;
+    throw error;
   }
 
-  const nuevoSaldo = Number(factura.saldoPendiente) - montoCobrado;
-  let nuevoEstado = factura.estado;
+  const nuevoImporteCobrado = Number(factura.importeCobrado || 0) + montoCobrado;
+  const nuevoSaldo = Number(factura.total) - nuevoImporteCobrado;
 
+  let nuevoEstado;
   if (nuevoSaldo <= 0) {
-    nuevoEstado = 'cobrada';
-  } else if (nuevoSaldo < Number(factura.total)) {
-    nuevoEstado = 'cobrada_parcial';
+    nuevoEstado = 'PAID';
+  } else if (nuevoImporteCobrado > 0) {
+    nuevoEstado = 'PARTIALLY_PAID';
+  } else {
+    nuevoEstado = 'ISSUED';
   }
 
   return prisma.factura.update({
     where: { id: facturaId },
     data: {
+      importeCobrado: nuevoImporteCobrado,
       saldoPendiente: Math.max(0, nuevoSaldo),
       estado: nuevoEstado
     }

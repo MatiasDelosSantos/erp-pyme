@@ -167,12 +167,14 @@ model Factura {
   numero           String   @unique
   fecha            DateTime @default(now())
   fechaVencimiento DateTime
+  moneda           String   @default("ARS")
   subtotal         Decimal  @default(0) @db.Decimal(12, 2)
   porcentajeIva    Decimal  @default(21) @db.Decimal(5, 2)
   montoIva         Decimal  @default(0) @db.Decimal(12, 2)
   total            Decimal  @default(0) @db.Decimal(12, 2)
-  estado           String   @default("pendiente") // pendiente, cobrada_parcial, cobrada, anulada
+  importeCobrado   Decimal  @default(0) @db.Decimal(12, 2)
   saldoPendiente   Decimal  @default(0) @db.Decimal(12, 2)
+  estado           String   @default("ISSUED") // ISSUED, PARTIALLY_PAID, PAID, VOID
   observaciones    String?
   creadoEn         DateTime @default(now())
 
@@ -185,6 +187,8 @@ model Factura {
   notasCredito NotaCredito[]
   cobros       Cobro[]
 
+  @@index([clienteId])
+  @@index([estado])
   @@map("facturas")
 }
 
@@ -278,7 +282,8 @@ model Cobro {
   numero        String   @unique
   fecha         DateTime @default(now())
   monto         Decimal  @db.Decimal(12, 2)
-  metodoPago    String   @default("efectivo") // efectivo, transferencia, cheque, tarjeta
+  moneda        String   @default("ARS")
+  metodoPago    String   @default("CASH") // CASH, TRANSFER, CARD, OTHER
   referencia    String?
   observaciones String?
   anulado       Boolean  @default(false)
@@ -291,6 +296,8 @@ model Cobro {
   cuentaBancariaId String?
   cuentaBancaria   CuentaBancaria? @relation(fields: [cuentaBancariaId], references: [id])
 
+  @@index([facturaId])
+  @@index([clienteId])
   @@map("cobros")
 }
 

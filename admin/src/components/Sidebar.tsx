@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Package, Users, LogOut, ArrowLeftRight, ShoppingCart } from "lucide-react";
+import { Package, Users, LogOut, ArrowLeftRight, ShoppingCart, FileText } from "lucide-react";
 import { signOut } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 
@@ -12,6 +12,7 @@ const navItems = [
   { href: "/app/clients", label: "Clientes", icon: Users },
   { href: "/app/stock", label: "Movimientos Stock", icon: ArrowLeftRight },
   { href: "/app/sales", label: "Ventas", icon: ShoppingCart },
+  { href: "/app/invoices", label: "Facturas", icon: FileText },
 ];
 
 export function Sidebar() {

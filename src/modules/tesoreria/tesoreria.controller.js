@@ -31,14 +31,19 @@ const obtenerCobro = asyncHandler(async (req, res) => {
   res.json({ exito: true, datos: cobro });
 });
 
+const listarCobrosPorFactura = asyncHandler(async (req, res) => {
+  const cobros = await tesoreriaService.listarCobrosPorFactura(req.params.facturaId);
+  res.json({ exito: true, datos: cobros });
+});
+
 const registrarCobro = asyncHandler(async (req, res) => {
   const cobro = await tesoreriaService.registrarCobro(req.body);
   res.status(201).json({ exito: true, datos: cobro });
 });
 
 const anularCobro = asyncHandler(async (req, res) => {
-  const resultado = await tesoreriaService.anularCobro(req.params.id);
-  res.json({ exito: true, ...resultado });
+  await tesoreriaService.anularCobro(req.params.id);
+  res.json({ exito: true });
 });
 
 // ============ PAGOS ============
@@ -89,6 +94,7 @@ module.exports = {
   crearCuentaBancaria,
   actualizarCuentaBancaria,
   listarCobros,
+  listarCobrosPorFactura,
   obtenerCobro,
   registrarCobro,
   anularCobro,

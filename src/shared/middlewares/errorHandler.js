@@ -7,8 +7,24 @@ class ErrorApp extends Error {
 }
 
 const errorHandler = (err, req, res, next) => {
-  console.error(`[Error] ${err.message}`);
+  console.error(`[Error] ${err.code || err.message}`);
 
+  // Error con código (nuevo formato para API)
+  if (err.code) {
+    const statusCode = err.statusCode || 500;
+    const response = {
+      exito: false,
+      error: {
+        code: err.code
+      }
+    };
+    if (err.details) {
+      response.error.details = err.details;
+    }
+    return res.status(statusCode).json(response);
+  }
+
+  // Error de aplicación (formato antiguo)
   if (err instanceof ErrorApp) {
     return res.status(err.codigoEstado).json({
       exito: false,
@@ -18,7 +34,7 @@ const errorHandler = (err, req, res, next) => {
 
   res.status(500).json({
     exito: false,
-    mensaje: 'Error interno del servidor'
+    error: { code: 'INTERNAL_ERROR' }
   });
 };
 
